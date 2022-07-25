@@ -5,12 +5,12 @@
   - System: Ubuntu 21.04
   - Peak Memory Usage: 36578MB (~36GB)
   - Total Time: 12702s (~3.5h)
-  - Experiment Brian:
+  - Experiment Brian:
       - Experiment brain id: 192341_SLA
       - Physical spacing: 0.01mmx0.01mmx0.01mm
       - Image size: 1128x1029x590 (ZYX)
       - Numerical dtype: uint8
-    - CCF template:
+  - CCF template:
       - Physical spacing: 0.025mmx0.025mmx0.025mm
       - Image size: 456x320x528 (ZYX)
       - Numerical dtype: uint16 for average template, uint32 for annotation
