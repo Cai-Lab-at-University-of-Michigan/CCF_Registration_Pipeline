@@ -19,3 +19,4 @@
    - Please use absolute path
    - `python pipeline.py --ref_img_path /path/to/ccf_template.nii.gz --ref_ann_path /path/to/ccf_template_annotation.nii.gz --sub_img_path /path/to/experimental_brain.nii.gz --result_path /path/to/save_results/`
 
+The warped ccf_template and ccf_template_annotation images are stored in `/path/to/save_results/subject/ants/ccf_affined`
