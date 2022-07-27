@@ -1,10 +1,10 @@
 # CCF_Registration_Pipeline
 
 - Profiling:
-  - Environment: AMD Ryzen Threadripper 1950X 16-Core Processor@2.2GHZ
+  - Environment: AMD Ryzen Threadripper 1950X 16-Core Processor<span>@</span>2.2GHZ
   - System: Ubuntu 21.04
   - Peak Memory Usage: 36578MB (~36GB)
-  - Total Time: 10602s (~3h)
+  - Total Time: 10902s (~3h)
   - Experiment Brian:
       - Experiment brain id: 192341_SLA
       - Physical spacing: 0.01mmx0.01mmx0.01mm
