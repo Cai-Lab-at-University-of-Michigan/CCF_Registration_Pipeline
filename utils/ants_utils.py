@@ -9,6 +9,7 @@ from skimage.transform import rescale
 import SimpleITK as sitk
 from utils.registration_utils import *
 from utils.img_utils import *
+from memory_profiler import profile
 
 
 def apply_transforms(target_path, mv_path, transformlist, verbose, ml_path=None):
@@ -107,6 +108,47 @@ def apply_transforms_torch(target_path, mv_path, aff_file, ml_path=None):
     return affined, loutput
 
 
+def apply_transforms_torchV2(target_path, mv_path, aff_file, target_shape=None, what_dtype=np.uint8):
+    def get_target_shape(target_path):
+        target = read_nii_bysitk(target_path)
+        target = sitk.GetArrayFromImage(target)
+        target_shape = target.shape
+
+        del target
+
+        return target_shape
+
+    if target_shape is None:
+        target_shape = get_target_shape(target_path)
+
+    aff = np.loadtxt(aff_file, dtype=np.float32)
+
+    # get rid of translation part for re-centering
+    aff[:3, 3] = 0
+
+    aff = torch.from_numpy(aff[:3, :])
+    aff = aff[None, ...]
+
+    moving = read_nii_bysitk(mv_path)
+    moving = sitk.GetArrayFromImage(moving)
+    moving = np.array(moving, dtype=np.float32)
+
+    # to tensor
+    moving_min, moving_max = np.amin(moving), np.amax(moving)
+    moving = moving / moving_max
+    moving = torch.from_numpy(moving)
+    moving = moving[None, None, ...]
+
+    affined = warp_affine3d(moving, aff, dsize=target_shape)
+    affined = affined.numpy()
+    affined = np.squeeze(affined)
+    affined = affined * moving_max
+
+    affined = np.array(affined, dtype=what_dtype)
+
+    return affined
+
+
 def expand_batch_ch_dim(input):
     """
     expand dimension [1,1] +[x,y,z]
@@ -120,6 +162,7 @@ def expand_batch_ch_dim(input):
         return None
 
 
+@profile
 def performAntsRegistration(mv_path, target_path, registration_type='syn', record_path=None, tl_path=None, fname=None, outprefix=''):
     """
     call [AntsPy](https://github.com/ANTsX/ANTsPy),
@@ -213,66 +256,158 @@ def performAntsRegistration(mv_path, target_path, registration_type='syn', recor
     return warpedfixout, warpedmovout, loutput
 
 
-# if __name__ == '__main__':
-#     from batchgenerators.utilities.file_and_folder_operations import *
-#     from img_utils import write_nii_bysitk, read_nii_bysitk
-#     from skimage.transform import resize
-#     from registration_utils import warp_affine3d
-#     import torch
-#     import numpy as np
-#
-#     ccf = '/home/binduan/Downloads/NIH/tmp_test/ccf_to_sub/average_template_25_warped.nii.gz affined.tif'
-#     ccf_ann = '/home/binduan/Downloads/NIH/tmp_test/ccf_to_sub/annotation_25_warped.nii.gz affined.tif'
-#     moving = '/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/subject/192341_red_mm_SLA.nii.gz'
-#
-#     record_path = '/home/binduan/Downloads/NIH/tmp_test/ccf_to_sub_final/'
-#
-#     # warp ccf_ann to moving image
-#     output, loutput = performAntsRegistration(mv_path=moving, target_path=ccf,
-#                                               tl_path=ccf_ann,
-#                                               registration_type='affine',
-#                                               record_path=record_path, fname='annotation_25',
-#                                               outprefix=join(record_path, 'temp'))
-#
-#     output = resize(output, output_shape=(1128, 1029, 590), order=1)
-#     loutput = resize(loutput, output_shape=(1128, 1029, 590), order=0)
-#
-#     print(output.shape, loutput.shape)
-#     print(np.amin(output), np.amax(output))
-#     print(np.amin(loutput), np.amax(loutput))
-#
-#     output = np.array(output, dtype=np.uint16)
-#     loutput = np.array(loutput, dtype=np.uint32)
-#
-#     write_nii_bysitk(join(record_path, 'average_template_25_warped.nii.gz'), output)
-#     write_nii_bysitk(join(record_path, 'annotation_25_warped.nii.gz'), loutput)
+def performAntsRegistrationV2(mv_path, target_path, registration_type='syn', record_path=None, tl_path=None, fname=None, outprefix=''):
+    """
+    call [AntsPy](https://github.com/ANTsX/ANTsPy),
+    :param mv_path: path of moving image
+    :param target_path: path of target image
+    :param registration_type: type of registration, support 'affine' and 'syn'(include affine)
+    :param record_path: path of saving results
+    :param tl_path: path of label of target image
+    :param fname: pair name or saving name of the image pair
+    :return: warped image (from moving to target), warped label (from target to moving)
+    """
 
-    # ccf = '/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/average_template_25_mm_ASL.nii.gz'
-    # ccf_ann = '/home/binduan/Downloads/NIH/hackathon/results/reference/annotation_25.nii.gz'
-    # moving = '/home/binduan/Downloads/NIH/hackathon/results/subject/warped_image_affine/192341_red_mm_SLA.nii.gz'
-    # aff = '/home/binduan/Downloads/NIH/tmp_test/subject/affines/192341_red_mm_SLA_ccf2sub_wo.txt'
+    moving = ants.image_read(mv_path)
+    moving = moving.numpy()
+    moving_shape = moving.shape
+    moving = rescale(moving, 1.0)
+    moving = ants.from_numpy(moving)
+
+    print(f'moving shape: {moving.shape}')
+
+    target = ants.image_read(target_path)
+    target = target.numpy()
+    target = rescale(target, 1.0)
+    target = ants.from_numpy(target)
+    print(f'target shape: {target.shape}')
+
+    start = time.time()
+    if os.path.isfile(os.path.join(record_path, fname + '_affine.mat')) and os.path.isfile(os.path.join(record_path, fname + '_invdisp.nii.gz')):
+        invtransforms = [os.path.join(record_path, fname + '_affine.mat'), os.path.join(record_path, fname + '_invdisp.nii.gz')]
+
+        img_np = ants.apply_transforms(fixed=moving, moving=target,
+                                         transformlist=invtransforms,
+                                         interpolator='linear', verbose=True)
+
+        img_np = img_np.numpy()
+        img_np = np.transpose(img_np, (2, 1, 0))
+        img_np = np.array(img_np, dtype=np.uint16)
+        write_nii_bysitk(os.path.join(record_path, 'deformed', fname + '_warped_ccf.nii.gz'), img_np)
+
+        if os.path.isfile(os.path.join(record_path, fname + '_disp.nii.gz')):
+            transforms = [os.path.join(record_path, fname + '_disp.nii.gz'), os.path.join(record_path, fname + '_affine.mat')]
+
+            img_np = ants.apply_transforms(fixed=target, moving=moving,
+                                           transformlist=transforms,
+                                           interpolator='linear', verbose=True)
+
+            img_np = img_np.numpy()
+            img_np = np.transpose(img_np, (2, 1, 0))
+            img_np = np.array(img_np, dtype=np.uint8)
+            write_nii_bysitk(os.path.join(record_path, 'deformed', fname + '_warped.nii.gz'), img_np)
+
+    else:
+        syn_res = ants.registration(fixed=target, moving=moving, type_of_transform='SyNCC',
+                                    grad_step=0.2,
+                                    flow_sigma=3,  # intra 3
+                                    total_sigma=0.1,
+                                    outprefix=outprefix,
+                                    aff_metric='mattes',
+                                    aff_sampling=32,
+                                    syn_metric='mattes',
+                                    syn_sampling=4)
+
+        cmd = 'mv ' + syn_res['fwdtransforms'][0] + ' ' + os.path.join(record_path, fname + '_disp.nii.gz')
+        cmd += '\n mv ' + syn_res['fwdtransforms'][1] + ' ' + os.path.join(record_path, fname + '_affine.mat')
+        cmd += '\n mv ' + syn_res['invtransforms'][1] + ' ' + os.path.join(record_path, fname + '_invdisp.nii.gz')
+        process = subprocess.Popen(cmd, shell=True)
+        process.wait()
+
+        img_np = np.transpose(syn_res['warpedfixout'].numpy(), (2, 1, 0))
+        img_np = np.array(img_np, dtype=np.uint16)
+        write_nii_bysitk(os.path.join(record_path, 'deformed', fname + '_warped_ccf.nii.gz'), img_np)
+
+        img_np = np.transpose(syn_res['warpedmovout'].numpy(), (2, 1, 0))
+        img_np = np.array(img_np, dtype=np.uint8)
+        write_nii_bysitk(os.path.join(record_path, 'deformed', fname + '_warped.nii.gz'), img_np)
+
+    print('syn registration finished and takes: :', time.time() - start)
+
+    # invtransforms = [os.path.join(record_path, fname + '_affine.mat'), os.path.join(record_path, fname + '_invdisp.nii.gz')]
     #
-    # record_path = '/home/binduan/Downloads/NIH/tmp_test/ccf_to_sub/'
-    #
-    # # warp ccf_ann to moving image
-    # output, loutput = performAntsRegistration(mv_path=moving, target_path=ccf,
-    #                                           tl_path=ccf_ann,
-    #                                           registration_type='syn',
-    #                                           record_path=record_path, fname='annotation_25',
-    #                                           outprefix=join(record_path, 'temp'))
-    #
-    # output = resize(output, output_shape=(456, 320, 528), order=1)
-    # loutput = resize(loutput, output_shape=(456, 320, 528), order=0)
-    #
-    # print(output.shape, loutput.shape)
-    # print(np.amin(output), np.amax(output))
-    # print(np.amin(loutput), np.amax(loutput))
-    #
-    # output = np.array(output, dtype=np.uint16)
-    # loutput = np.array(loutput, dtype=np.uint32)
-    #
-    # write_nii_bysitk(join(record_path, 'average_template_25_warped.nii.gz'), output)
-    # write_nii_bysitk(join(record_path, 'annotation_25_warped.nii.gz'), loutput)
+    # return invtransforms, moving_shape
 
 
+def applyToAnnotation(invtransforms, record_path, moving_shape=None, tl_path=None, fname=None):
+    """
+    call [AntsPy](https://github.com/ANTsX/ANTsPy),
+    :param mv_path: path of moving image
+    :param target_path: path of target image
+    :param registration_type: type of registration, support 'affine' and 'syn'(include affine)
+    :param record_path: path of saving results
+    :param tl_path: path of label of target image
+    :param fname: pair name or saving name of the image pair
+    :return: warped image (from moving to target), warped label (from target to moving)
+    """
 
+    tl_np = sitk.GetArrayFromImage(sitk.ReadImage(tl_path))
+    l_target = ants.from_numpy(np.transpose(tl_np))
+
+    if moving_shape is None:
+        l_moving = l_target.clone()
+    else:
+        l_moving = np.ones(moving_shape)
+        l_moving = np.array(l_moving, dtype=tl_np.dtype)
+        l_moving = ants.from_numpy(l_moving)
+
+    start = time.time()
+    l_moving = ants.apply_transforms(fixed=l_moving, moving=l_target,
+                                    transformlist=invtransforms,
+                                    interpolator='nearestNeighbor', verbose=True)
+
+
+    l_moving = l_moving.numpy()
+    l_moving = np.transpose(l_moving, (2, 1, 0))
+    l_moving = np.array(l_moving, dtype=np.uint32)
+    write_nii_bysitk(os.path.join(record_path, 'deformed', fname + '_warped_ccf_annotation.nii.gz'), l_moving)
+
+    print(f'Apply to annotation finished and takes {time.time() - start} s' )
+
+
+@profile
+def main():
+    from img_utils import write_nii_bysitk, read_nii_bysitk
+    from skimage.transform import resize
+    from registration_utils import warp_affine3d
+    import torch
+    import numpy as np
+    from batchgenerators.utilities.file_and_folder_operations import maybe_mkdir_p
+
+    ccf = '/home/binduan/Downloads/NIH/tmp_test1/average_template_10.nii.gz'
+    ccf_ann = '/home/binduan/Downloads/NIH/tmp_test1/annotation_10.nii.gz'
+    moving = '/home/binduan/Downloads/NIH/tmp_test1/subject/ants/subject_affined/192341_red_mm_SLA.nii.gz'
+
+    name = 'annotation_10'
+
+    record_path = '/home/binduan/Downloads/NIH/tmp_test1/'
+
+    maybe_mkdir_p(os.path.join(record_path, 'deformed'))
+
+    invtransforms, moving_shape = performAntsRegistrationV2(
+        mv_path=moving,
+        target_path=ccf,
+        tl_path=ccf_ann,
+        registration_type='syn',
+        record_path=record_path, fname=name,
+        outprefix=join(record_path, 'temp'))
+
+    applyToAnnotation(invtransforms, record_path, moving_shape, tl_path=ccf_ann, fname=name)
+
+
+if __name__ == '__main__':
+    import time
+    from batchgenerators.utilities.file_and_folder_operations import *
+    start_time = time.time()
+    main()
+    print(f'Time took: {time.time() - start_time} s')

@@ -120,7 +120,7 @@ def downsample_and_remove_bright_lines(sample, result_path, ref_meta_file, kerne
 
     # median filtering
     print('start median filtering')
-    fimage = rescale(img_np / 255., 0.5, anti_aliasing=False)
+    fimage = rescale(np.array(img_np / 255., dtype=np.float32), 0.5, anti_aliasing=False)
     fimage = AdaptiveMedianFilter(fimage, kernerl_size)
     fimage = resize(fimage, img_np.shape, anti_aliasing=True)
 

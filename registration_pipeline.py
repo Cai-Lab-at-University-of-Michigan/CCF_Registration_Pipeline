@@ -101,7 +101,7 @@ def step_warp_affine(aff, sub_img, result_path):
 
     img_obj = read_nii_bysitk(sub_img, metadata=False)
     image = sitk.GetArrayFromImage(img_obj)
-    image = image / 255.  # zyx
+    image = np.array(image / 255., dtype=np.float32)  # zyx
     # image = rescale(image, scale=0.125)
 
     dst_shape = calculate_warped_shape(image.shape, aff)
@@ -113,13 +113,14 @@ def step_warp_affine(aff, sub_img, result_path):
     aff = torch.from_numpy(aff[:3, :])
     aff = aff[None, ...]
 
-    warped_image = warp_affine3d(image, aff, dsize=dst_shape)
+    image = warp_affine3d(image, aff, dsize=dst_shape)
 
-    warped_image = warped_image.numpy()
-    warped_image = np.array(warped_image * 255, dtype=np.uint8)
+    image = image.numpy()
+    image = np.squeeze(image)
+    image = np.array(image * 255, dtype=np.uint8)
 
     warped_image_path = join(result_path, name + '.nii.gz')
-    write_nii_bysitk(warped_image_path, warped_image)
+    write_nii_bysitk(warped_image_path, image)
 
     return warped_image_path
 
@@ -140,7 +141,7 @@ def run_pipeline(ref_img_path, ref_pcd_path, ref_meta_file, sub_img_path, sub_pc
     # create directory
     maybe_mkdir_p(join(result_path, 'affines'))
     maybe_mkdir_p(join(result_path, 'warped_image_affine'))
-    maybe_mkdir_p(join(result_path, 'warped_image_ants_affine'))
+    # maybe_mkdir_p(join(result_path, 'warped_image_ants_affine'))
     maybe_mkdir_p(join(result_path, 'deformed'))
 
     if os.path.isfile(ref_img_path):

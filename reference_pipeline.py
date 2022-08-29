@@ -1,28 +1,31 @@
 from __future__ import print_function
 
 import argparse
-
-import SimpleITK as sitk
-import ray
-from batchgenerators.utilities.file_and_folder_operations import *
-import open3d as o3d
-import numpy as np
-
-from reference_contour_seg import batch_obtain_mask, batch_obtain_contour
-from utils.img_utils import read_nii_bysitk, write_nii_bysitk
 import multiprocessing as mp
-from utils.registration_utils import find_cortex_bbox, get_voxel_scaling_matrix
-
+import os
+os.environ["MODIN_ENGINE"] = "ray"
+import ray
 RUN_ENV = {
-    "working_dir": '/home/binduan/Downloads/NIH/hackathon/api'}  # to make sure every worker can access this pymodule
+    "working_dir": os.getcwd()}  # to make sure every worker can access this pymodule
 # # ATTENTION: all functions used in do_worker should be in either pymodule or installed package, do not include
 # # functions in current py file, otherwise, it would not be recognized
 #
+
+print(f'CPUs: {mp.cpu_count()}')
 if ray.is_initialized() == True:
     ray.shutdown()
 ray.init(runtime_env=RUN_ENV, num_cpus=mp.cpu_count())
 assert ray.is_initialized() == True
 
+
+import SimpleITK as sitk
+import numpy as np
+import open3d as o3d
+from batchgenerators.utilities.file_and_folder_operations import *
+
+from reference_contour_seg import batch_obtain_mask, batch_obtain_contour
+from utils.img_utils import read_nii_bysitk, write_nii_bysitk
+from utils.registration_utils import find_cortex_bbox, get_voxel_scaling_matrix
 
 def run_pipeline(ref_path, result_path='/home/binduan/Downloads/NIH/hackathon/results/reference/',
                  down_factor=1):
@@ -44,7 +47,9 @@ def run_pipeline(ref_path, result_path='/home/binduan/Downloads/NIH/hackathon/re
     img_info["image_shape"] = img_np.shape  # ZYX
 
     # downsampling here not used
-    down_factor = None
+    # down_factor = None
+
+    print(f'down_factor: {down_factor}')
 
     axis = int(np.argmax(img_np.shape))
 
@@ -72,7 +77,7 @@ def run_pipeline(ref_path, result_path='/home/binduan/Downloads/NIH/hackathon/re
     pcd = pcd.transform(get_voxel_scaling_matrix(img_info['spacing']))
 
     # cortex mask volume
-    _, starting_index, ending_index = find_cortex_bbox(pcd, factor=4, return_indices=True)
+    _, starting_index, ending_index = find_cortex_bbox(pcd, factor=16, return_indices=True)
     if axis == 0:
         img_info['cortex_mask_volume'] = str(np.sum(masks[starting_index:ending_index + 1, ...] > 0))
     elif axis == 1:
@@ -87,15 +92,15 @@ def run_pipeline(ref_path, result_path='/home/binduan/Downloads/NIH/hackathon/re
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Reference pipeline for 2022 Brain registration hackathon.')
     parser.add_argument('--ref_path', type=str,
-                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/average_template_10.nii.gz',
                         help='image file (nii.gz).')
     parser.add_argument('--result_path', type=str,
-                        default='/home/binduan/Downloads/NIH/hackathon/results/reference/',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/reference',
                         help='Path to the image file (nii.gz).')
-    parser.add_argument('--down_factor', type=int,
-                        default=1,
+    parser.add_argument('--down_factor', type=float,
+                        default=0.2,
                         help='if specified, subject images is downsampled for faster computation, which might result in inferior performance')
 
     args = parser.parse_args()
 
-    run_pipeline(ref_path=args.ref_path, result_path=args.result_path)
+    run_pipeline(ref_path=args.ref_path, result_path=args.result_path, down_factor=args.down_factor)

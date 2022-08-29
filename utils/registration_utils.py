@@ -16,8 +16,8 @@ from kornia.geometry.conversions import (
     normalize_homography3d,
 )
 from kornia.utils.helpers import _torch_inverse_cast
-from probreg import cpd, l2dist_regs, bcpd
-from probreg.transformation import Transformation
+# from probreg import cpd, l2dist_regs, bcpd
+# from probreg.transformation import Transformation
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import argrelextrema
 from scipy.spatial import distance
@@ -75,7 +75,7 @@ def compose_affine_transforms(affine_list: List):
     for a in reversed(affine_list):
         aff = aff @ a
 
-    return aff
+    return np.array(aff, dtype=np.float32)
 
 
 def warp_affine3d(
@@ -138,10 +138,15 @@ def warp_affine3d(
         grid[..., i] = grid[..., i] - avg_grid
 
     if normal:
-        # resample to [-1, 1]
-        for i in range(len(dsize)):
-            max_grid, min_grid = torch.amax(grid[..., i]), torch.amin(grid[..., i])
-            grid[..., i] = torch.where(grid[..., i] >= 0, grid[..., i] / max_grid, -grid[..., i] / min_grid)
+        pass
+        # # resample to [-1, 1]
+        # for i in range(len(dsize)):
+        #     max_grid, min_grid = torch.amax(grid[..., i]), torch.amin(grid[..., i])
+        #     grid[..., i] = torch.where(grid[..., i] >= 0, grid[..., i] / max_grid, -grid[..., i] / min_grid)
+
+    # print(f'M dtype: {M.dtype}')
+    # print(f'source dtype: {src.dtype}')
+    # print(f'grid dtype: {grid.dtype}')
 
     return torch.nn.functional.grid_sample(
         src, grid, align_corners=align_corners, mode=flags, padding_mode=padding_mode
@@ -157,7 +162,7 @@ def prepare_affine_matrix(trans_sub, mid_aff, trans_ref):
 
     aff = compose_affine_transforms(new_aff)
 
-    return aff
+    return np.asarray(aff, dtype=np.float32)
 
 
 ############################
@@ -565,8 +570,8 @@ def draw_registration_result(source, target, transformation=None):
     if transformation is not None:
         if isinstance(transformation, np.ndarray):
             source_temp.transform(transformation)
-        elif isinstance(transformation, Transformation):  # probreg transformation type
-            source_temp.points = transformation.transform(source_temp.points)
+        # elif isinstance(transformation, Transformation):  # probreg transformation type
+        #     source_temp.points = transformation.transform(source_temp.points)
         else:
             source_temp.points = transformation[0].transform(source_temp.points)
     o3d.visualization.draw_geometries([source_temp, target_temp])
@@ -646,29 +651,29 @@ class GlobalContourRegister():
         # draw_point_cloud(pcd_down)
         return pcd_down, pcd_fpfh
 
-
-class NonRigidRegister():
-    """
-    Algorithm type('cpd', 'svr', 'gmmreg', 'bcpd')
-    """
-
-    def __init__(self, algo_type_name: str = "cpd"):
-        super(NonRigidRegister).__init__()
-        self.algo_type_name = algo_type_name
-
-    def __call__(self, source, target, **kwargs):
-        cv = lambda x: np.asarray(x.points if isinstance(x, o3d.geometry.PointCloud) else x)
-        if self.algo_type_name == "cpd":
-            reg = cpd.NonRigidCPD(cv(source))
-        elif self.algo_type_name == "svr":
-            reg = l2dist_regs.TPSSVR(cv(source))
-        elif self.algo_type_name == "gmmreg":
-            reg = l2dist_regs.TPSGMMReg(cv(source))
-        elif self.algo_type_name == "bcpd":
-            reg = bcpd.CombinedBCPD(cv(source))
-        else:
-            raise ValueError("Unknown algorithm type %s" % self.algo_type_name)
-
-        res = reg.registration(cv(target))
-
-        return res
+#
+# class NonRigidRegister():
+#     """
+#     Algorithm type('cpd', 'svr', 'gmmreg', 'bcpd')
+#     """
+#
+#     def __init__(self, algo_type_name: str = "cpd"):
+#         super(NonRigidRegister).__init__()
+#         self.algo_type_name = algo_type_name
+#
+#     def __call__(self, source, target, **kwargs):
+#         cv = lambda x: np.asarray(x.points if isinstance(x, o3d.geometry.PointCloud) else x)
+#         if self.algo_type_name == "cpd":
+#             reg = cpd.NonRigidCPD(cv(source))
+#         elif self.algo_type_name == "svr":
+#             reg = l2dist_regs.TPSSVR(cv(source))
+#         elif self.algo_type_name == "gmmreg":
+#             reg = l2dist_regs.TPSGMMReg(cv(source))
+#         elif self.algo_type_name == "bcpd":
+#             reg = bcpd.CombinedBCPD(cv(source))
+#         else:
+#             raise ValueError("Unknown algorithm type %s" % self.algo_type_name)
+#
+#         res = reg.registration(cv(target))
+#
+#         return res

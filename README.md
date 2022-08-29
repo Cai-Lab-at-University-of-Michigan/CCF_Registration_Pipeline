@@ -1,4 +1,25 @@
 # CCF_Registration_Pipeline
+
+## Using Elastix
+- Profiling:
+  - Environment: AMD Ryzen Threadripper 1950X 16-Core Processor<span>@</span>2.2GHZ
+  - System: Ubuntu 21.04
+  - Peak Memory Usage: 70000MB (~69GB)
+  - Total Time: 3014s (~1h)
+  - Experiment Brian:
+      - Experiment brain id: 192341_SLA
+      - Physical spacing: 0.01mmx0.01mmx0.01mm
+      - Image size: 1128x1029x590 (ZYX)
+      - Numerical dtype: uint8
+  - CCF template:
+      - Physical spacing: 0.01mmx0.01mmx0.01mm
+      - Image size: 1140x800x1320 (ZYX)
+      - Numerical dtype: uint16 for average template, uint32 for annotation
+- To run the program:
+   - Please use absolute path
+   - `python pipeline_elastix.py --ref_img_path /path/to/ccf_template.tif --ref_ann_path /path/to/ccf_template_annotation.tif --sub_img_path /path/to/experimental_brain.tif--result_path /path/to/save_results/ --suffix .tif`
+
+## Using AntsPy
 - Profiling:
   - Environment: AMD Ryzen Threadripper 1950X 16-Core Processor<span>@</span>2.2GHZ
   - System: Ubuntu 21.04
@@ -15,7 +36,7 @@
       - Numerical dtype: uint16 for average template, uint32 for annotation
 - To run the program:
    - Please use absolute path
-   - `python pipeline.py --ref_img_path /path/to/ccf_template.nii.gz --ref_ann_path /path/to/ccf_template_annotation.nii.gz --sub_img_path /path/to/experimental_brain.nii.gz --result_path /path/to/save_results/`
+   - `python pipeline.py --ref_img_path /path/to/ccf_template.nii.gz --ref_ann_path /path/to/ccf_template_annotation.nii.gz --sub_img_path /path/to/experimental_brain.nii.gz --result_path /path/to/save_results/ --suffix .nii.gz`
 
 **[Results]**: Warped ccf_template and ccf_template_annotation images are stored in `/path/to/save_results/subject/ants/ccf_affined/`
 

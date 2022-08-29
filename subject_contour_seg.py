@@ -92,15 +92,15 @@ def obtain_best_threshoding(image: np.ndarray, stripe=False, fft=False, kernel_s
     shape_ = image.shape
     dtype_ = image.dtype
 
+    if np.amax(image) < 10:
+        return np.zeros_like(image)
+
     if scale_factor is not None:
         image = rescale(image, scale_factor, anti_aliasing=False)
         kernel_size = kernel_size * np.amin(scale_factor)
 
     if stripe:
         image = remove_bright_lines(image, kernerl_size=kernel_size)
-
-    if np.amax(image) < 10:
-        return np.zeros_like(image)
 
     # remove striples and thresholding
     if fft:
@@ -207,6 +207,8 @@ def find_contours(image, visualized=False, scale_factor=None, stripe=False):
 
     if stripe:
         image = remove_bright_lines(image)
+
+    image = np.interp(image, [np.min(image), np.max(image)], [0, 255]).astype(np.uint8)
 
     # radius = estimate_radius(image)
     params = lv_params.set_subject_params(image, init_mask=mask, c0=6, kernel_size=3, visualized=visualized)

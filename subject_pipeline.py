@@ -3,24 +3,12 @@ from __future__ import print_function
 import argparse
 import glob
 import multiprocessing as mp
-
-import SimpleITK as sitk
-import matplotlib.pyplot as plt
-import numpy as np
-import open3d as o3d
+import os
+os.environ["MODIN_ENGINE"] = "ray"
 import ray
-import torch
-from batchgenerators.utilities.file_and_folder_operations import *
-from skimage.transform import rescale
-
-from subject_contour_seg import batch_obtain_mask, batch_obtain_contour, exclude_dim_slices
-from utils.img_utils import read_nii_bysitk, write_nii_bysitk
-from utils.registration_utils import find_cortex_bbox, get_voxel_scaling_matrix, \
-    iterative_estimate_transformation_by_cortex, calculate_warped_shape, \
-    prepare_affine_matrix, warp_affine3d
 
 RUN_ENV = {
-    "working_dir": '/home/binduan/Downloads/NIH/hackathon/api'}  # to make sure every worker can access this pymodule
+    "working_dir": os.getcwd()}  # to make sure every worker can access this pymodule
 
 # ATTENTION: all functions used in do_worker should be in either pymodule or installed package, do not include
 # functions in current py file, otherwise, it would not be recognized
@@ -28,6 +16,19 @@ RUN_ENV = {
 ray.shutdown()
 ray.init(runtime_env=RUN_ENV, num_cpus=mp.cpu_count())
 assert ray.is_initialized() == True
+
+import SimpleITK as sitk
+import numpy as np
+import open3d as o3d
+import torch
+from batchgenerators.utilities.file_and_folder_operations import *
+
+from subject_contour_seg import batch_obtain_mask, batch_obtain_contour
+from utils.img_utils import read_nii_bysitk, write_nii_bysitk
+from utils.registration_utils import find_cortex_bbox, get_voxel_scaling_matrix, \
+    iterative_estimate_transformation_by_cortex, calculate_warped_shape, \
+    prepare_affine_matrix, warp_affine3d
+from memory_profiler import profile
 
 
 def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject/preprocessed/',
@@ -60,20 +61,20 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
     ref_pcd = ref_pcd.transform(get_voxel_scaling_matrix(ref_spacing))
 
     # ref_masks = sitk.GetArrayFromImage(read_nii_bysitk(glob.glob(join(ref_path, 'mask', '*.nii.gz'))[0]))
-    ref_cortex = find_cortex_bbox(ref_pcd, factor=3.)
+    ref_cortex = find_cortex_bbox(ref_pcd, factor=18.)
 
     for i, sample in enumerate(samples):
 
         name = sample.split('/')[-1].split('.nii.gz')[0]
 
-        if os.path.isfile(join(result_path, 'point_cloud', name + '.pcd')):
-            continue
+        # if os.path.isfile(join(result_path, 'point_cloud', name + '.pcd')):
+        #     continue
 
         img_obj, img_info = read_nii_bysitk(sample, metadata=True)
         img_np = sitk.GetArrayFromImage(img_obj)
 
         # downsampling here not using for now
-        down_factor = None
+        # down_factor = None
 
         # only one step is needed, bounding boxes of cortex is aligned iteratively though
         for step in range(1):
@@ -85,8 +86,7 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
             if step > 0:
                 last_cortex_width = ending_index - starting_index
 
-            write_nii_bysitk(join(result_path, 'interim', name + f'_isotropical_step_{step}_raw.nii.gz'), img_np,
-                             img_obj)
+            write_nii_bysitk(join(result_path, 'interim', name + f'_isotropical_step_{step}_raw.nii.gz'), img_np, img_obj)
 
             # run thresholding and save
             print(f'{i:03d}: step-{step} running foreground segmentation')
@@ -94,6 +94,8 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
 
             write_nii_bysitk(join(result_path, 'interim', name + f'_isotropical_step_{step}_mask.nii.gz'),
                              np.array(masks, dtype=np.uint8), img_obj)
+
+            del masks
 
             # run level-set contour
             print(f'{i:03d}: step-{step} finetuning segmentation contour')
@@ -106,9 +108,12 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
             pcd.points = o3d.utility.Vector3dVector(contours)
             o3d.io.write_point_cloud(join(result_path, 'interim', name + f'_isotropical_step_{step}_pcd.pcd'), pcd)
 
+            pcd_shape = pcd.get_max_bound() - pcd.get_min_bound()
+            print(pcd_shape)
+
             pcd = pcd.transform(get_voxel_scaling_matrix(ref_spacing))
             try:
-                sub_cortex, starting_index, ending_index = find_cortex_bbox(pcd, factor=6, return_indices=True)
+                sub_cortex, starting_index, ending_index = find_cortex_bbox(pcd, factor=16., return_indices=True)
             except:
                 print("finding cortex wrong due to bad segmentation, please inspect.")
                 continue
@@ -132,7 +137,7 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
 
             dst_shape = calculate_warped_shape(img_np.shape, aff)
 
-            img_np = img_np / 255.  # zyx
+            img_np = np.array(img_np / 255., dtype=np.float32)  # zyx
 
             # To Tensor
             img_np = torch.from_numpy(img_np)
@@ -141,7 +146,9 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
             aff = torch.from_numpy(aff[:3, :])
             aff = aff[None, ...]
 
-            warped_image = warp_affine3d(img_np, aff, dsize=dst_shape, normal=True)
+            print(f'target shape:{dst_shape}')
+
+            warped_image = warp_affine3d(img_np, aff, dsize=dst_shape)
 
             warped_image = warped_image.numpy()
             warped_image = np.array(warped_image * 255, dtype=np.uint8)
@@ -154,6 +161,8 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
             img_obj.SetSpacing(ref_spacing)
 
             img_np = warped_image
+
+            print(f'One iteration of alignment finished.')
 
         # final step
         write_nii_bysitk(join(result_path, 'prealigned', name + '.nii.gz'), img_np, img_obj)
@@ -179,7 +188,7 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
         img_info['spacing'] = img_obj.GetSpacing()
         img_info['mask_volume'] = str(np.sum(masks > 0))
         try:
-            _, starting_index, ending_index = find_cortex_bbox(pcd, factor=6, return_indices=True)
+            _, starting_index, ending_index = find_cortex_bbox(pcd, factor=16, return_indices=True)
             if axis == 0:
                 img_info['cortex_mask_volume'] = str(np.sum(masks[starting_index:ending_index + 1, ...] > 0))
             elif axis == 1:
@@ -195,19 +204,19 @@ def run_pipeline(sub_path='/home/binduan/Downloads/NIH/hackathon/results/subject
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Reference pipeline for 2022 Brain registration hackathon.')
     parser.add_argument('--sub_path', type=str,
-                        default='/home/binduan/Downloads/NIH/hackathon/results/subject/preprocessed/',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/subject/preprocessed/',
                         help='Path to the preprocessed image file (nii.gz).')
     parser.add_argument('--result_path', type=str,
-                        default='/home/binduan/Downloads/NIH/hackathon/results/subject/',
-                        help='Path to the image file (nii.gz).')
+                        default='/home/binduan/Downloads/NIH/tmp_test1/subject/',
+                        help='Path for storing result.')
     parser.add_argument('--ref_path', type=str,
-                        default='/home/binduan/Downloads/NIH/hackathon/results/reference/',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/reference/',
                         help='Path to the reference folder.')
     parser.add_argument('--ref_meta_file', type=str,
-                        default='/home/binduan/Downloads/NIH/hackathon/results/reference/reference.meta',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/reference/reference.meta',
                         help='Path to the reference meta file.')
-    parser.add_argument('--down_factor', type=str,
-                        default=None,
+    parser.add_argument('--down_factor', type=float,
+                        default=0.2,
                         help='if specified, subject images is downsampled for faster computation, which might result in inferior performance')
 
     args = parser.parse_args()

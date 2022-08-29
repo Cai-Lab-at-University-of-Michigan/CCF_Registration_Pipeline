@@ -6,7 +6,7 @@ import numpy as np
 import scipy
 from batchgenerators.utilities.file_and_folder_operations import *
 
-from utils.ants_utils import performAntsRegistration, apply_transforms_torch
+from utils.ants_utils import performAntsRegistrationV2, apply_transforms_torchV2, applyToAnnotation
 from utils.img_utils import write_nii_bysitk, convert_to_nii, get_physical_spacing
 from utils.registration_utils import compose_affine_transforms
 import SimpleITK as sitk
@@ -24,13 +24,13 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
 
     if ref_img_path.endswith('.tif'):
         file_str = join(result_path, ref_img_path.split('/')[-1].replace('.tif', '.nii.gz'))
-        ref_img_path, ref_img_spacing = convert_to_nii(ref_img_path, file_str)
+        ref_img_path, ref_img_spacing = convert_to_nii(ref_img_path, file_str, normalize=True)
     else:
         ref_img_spacing = get_physical_spacing(ref_img_path)
 
     if ref_ann_path.endswith('.tif'):
         file_str = join(result_path, ref_ann_path.split('/')[-1].replace('.tif', '.nii.gz'))
-        ref_ann_path, ref_ann_spacing = convert_to_nii(ref_ann_path, file_str)
+        ref_ann_path, ref_ann_spacing = convert_to_nii(ref_ann_path, file_str, what_dtype=np.float32)
     else:
         ref_ann_spacing = get_physical_spacing(ref_ann_path)
 
@@ -71,7 +71,7 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
 
     ###step 3:###
     #    2. segment subject image if not yet
-    if not os.path.isfile(join(sub_save_path, 'point_cloud', ref_name + '.pcd')):
+    if not os.path.isfile(join(sub_save_path, 'point_cloud', name + '.pcd')):
         preprocessed_sub_path = join(sub_save_path, 'preprocessed', name + '.nii.gz')
         cmd = f'python subject_pipeline.py --sub_path {preprocessed_sub_path} --result_path {sub_save_path} --ref_path {ref_save_path} --ref_meta_file {ref_meta_file}'
         process = subprocess.Popen(cmd, shell=True)
@@ -82,8 +82,7 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
 
     ###step 4:###
     #    1. point cloud global registration for the subject to ccf
-    if not os.path.isfile(join(sub_save_path, 'warped_image_affine', name + '.nii.gz')) or not os.path.isfile(
-            join(sub_save_path, 'deformed', name + '.nii.gz')):
+    if not os.path.isfile(join(sub_save_path, 'warped_image_affine', name + '.nii.gz')):
         red_pcd_path = subfiles(join(ref_save_path, 'point_cloud'), prefix=ref_name, suffix='.pcd')[0]
         sub_pcd_path = subfiles(join(sub_save_path, 'point_cloud'), prefix=name, suffix='.pcd')[0]
         sub_meta_path = subfiles(join(sub_save_path, 'meta'), prefix=name, suffix='.meta')[0]
@@ -139,18 +138,18 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
 
         # apply affine to raw image
         if not os.path.isfile(join(record_path, 'subject_affined', name + '.nii.gz')):
-            affined_raw, _ = apply_transforms_torch(target_path=ref_img_path, mv_path=sub_img_path,
-                                                    aff_file=join(sub_save_path, 'affines', name + '_sub2ccf_wo.txt'))
+            affined_raw = apply_transforms_torchV2(target_path=ref_img_path, mv_path=sub_img_path,
+                                                    aff_file=join(sub_save_path, 'affines', name + '_sub2ccf_wo.txt'), what_dtype=np.uint8)
 
-            affined_raw = np.array(affined_raw, dtype=np.uint16)
-            write_nii_bysitk(join(record_path, 'subject_affined', name + '.nii.gz'), affined_raw)
+            write_nii_bysitk(join(record_path, 'subject_affined', name + '.nii.gz'), affined_raw, spacing=ref_img_spacing)
+            del affined_raw
 
             print(f'Subject affine transformation took {time.time() - step_time} s')
             step_time = time.time()
 
         # non-linear deformation
-        if not os.path.isfile(join(record_path, 'deformed', name + '_warped_ccf_annotation.nii.gz')):
-            warpedfixout, warpedmovout, loutput = performAntsRegistration(
+        if not os.path.isfile(join(record_path, 'deformed', name + '_warped_ccf.nii.gz')):
+            performAntsRegistrationV2(
                 mv_path=join(record_path, 'subject_affined', name + '.nii.gz'),
                 target_path=ref_img_path,
                 tl_path=ref_ann_path,
@@ -158,60 +157,34 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
                 record_path=record_path, fname=name,
                 outprefix=join(record_path, 'temp'))
 
-            warpedfixout = np.array(warpedfixout, dtype=np.uint16)
-            warpedmovout = np.array(warpedmovout, dtype=np.uint16)
-            loutput = np.array(loutput, dtype=np.uint32)
+            print(f'Template deformation done.')
 
-            write_nii_bysitk(join(record_path, 'deformed', name + '_warped_ccf.nii.gz'), warpedfixout)
-            write_nii_bysitk(join(record_path, 'deformed', name + '_warped.nii.gz'), warpedmovout)
-            write_nii_bysitk(join(record_path, 'deformed', name + '_warped_ccf_annotation.nii.gz'), loutput)
+        invtransforms = [os.path.join(record_path, name + '_affine.mat'), os.path.join(record_path, name + '_invdisp.nii.gz')]
 
-            print(f'Non-linear deformation took {time.time() - step_time} s')
-            step_time = time.time()
+        if not os.path.isfile(join(record_path, 'deformed', name + '_warped_ccf_annotation.nii.gz')):
+            applyToAnnotation(invtransforms, record_path, tl_path=ref_ann_path, fname=name)
+            print(f'Annotation deformation done.')
+
+        print(f'Non-linear deformation took {time.time() - step_time} s')
+        step_time = time.time()
 
         # apply affine to match size
         if not os.path.isfile(join(record_path, 'ccf_affined', name + '_warped_ccf_annotation' + suffix)):
-            affined, ann_affine = apply_transforms_torch(target_path=sub_img_path,
-                                                         mv_path=join(record_path, 'deformed',
-                                                                      name + '_warped_ccf.nii.gz'),
-                                                         aff_file=join(sub_save_path, 'affines',
-                                                                       name + '_ccf2sub_wo.txt'),
-                                                         ml_path=join(record_path, 'deformed',
-                                                                      name + '_warped_ccf_annotation.nii.gz'))
-
-            affined = np.array(affined, dtype=np.uint16)
-            ann_affine = np.array(ann_affine, dtype=np.uint32)
+            affined = apply_transforms_torchV2(target_path=sub_img_path, mv_path=join(record_path, 'deformed', name + '_warped_ccf.nii.gz'),
+                                               aff_file=join(sub_save_path, 'affines', name + '_ccf2sub_wo.txt'), what_dtype=np.uint16)
 
             affined = sitk.GetImageFromArray(affined)
             affined.SetSpacing(sub_img_spacing)
             sitk.WriteImage(affined, join(record_path, 'ccf_affined', name + '_warped_ccf' + suffix))
 
-            # due to simpltitk can not save uint32 tif
-            if suffix == '.tif':
-                ann_affine = np.array(ann_affine, dtype=np.float32)
+            affined = apply_transforms_torchV2(target_path=sub_img_path, mv_path=join(record_path, 'deformed', name + '_warped_ccf_annotation.nii.gz'),
+                                               aff_file=join(sub_save_path, 'affines', name + '_ccf2sub_wo.txt'), what_dtype=np.float32)
 
-            ann_affine = sitk.GetImageFromArray(ann_affine)
-            ann_affine.SetSpacing(sub_img_spacing)
-            sitk.WriteImage(ann_affine, join(record_path, 'ccf_affined', name + '_warped_ccf_annotation' + suffix))
+            affined = sitk.GetImageFromArray(affined)
+            affined.SetSpacing(sub_img_spacing)
+            sitk.WriteImage(affined, join(record_path, 'ccf_affined', name + '_warped_ccf_annotation' + suffix))
 
             print(f'Apply affine to match size took {time.time() - step_time} s')
-
-        # if not os.path.isfile(join(sub_save_path, 'final', name + '_warped_ccf_annotation.nii.gz')):
-        #     warpedfixout, warpedmovout, loutput = performAntsRegistration(
-        #         mv_path=sub_img_path,
-        #         target_path=join(record_path, 'ccf_affined', name + '_warped_ccf.nii.gz'),
-        #         tl_path=join(record_path, 'ccf_affined', name + '_warped_ccf_annotation.nii.gz'),
-        #         registration_type='affine',
-        #         record_path=record_path, fname=name,
-        #         outprefix=join(record_path, 'temp'))
-        #
-        #     warpedfixout = np.array(warpedfixout, dtype=np.uint16)
-        #     warpedmovout = np.array(warpedmovout, dtype=np.uint16)
-        #     loutput = np.array(loutput, dtype=np.uint32)
-        #
-        #     write_nii_bysitk(join(sub_save_path, 'final', name + '_warped_ccf.nii.gz'), warpedfixout)
-        #     write_nii_bysitk(join(sub_save_path, 'final', name + '_warped.nii.gz'), warpedmovout)
-        #     write_nii_bysitk(join(sub_save_path, 'final', name + '_warped_ccf_annotation.nii.gz'), loutput)
 
     print(f'Total time: {time.time() - start_time} s')
 
@@ -219,18 +192,18 @@ def run_pipeline(ref_img_path, ref_ann_path, sub_img_path, result_path, suffix):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Reference pipeline for 2022 Brain registration hackathon.')
     parser.add_argument('--ref_img_path', type=str,
-                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/average_template_25_mm_ASL.nii.gz',
+                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/average_template_10.tif',
                         help='Path to the ccf image file (nii.gz).')
     parser.add_argument('--ref_ann_path', type=str,
-                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/annotation_25.nii.gz',
+                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/reference/annotation_10.tif',
                         help='Path to the ccf annotation file (nii.gz).')
     parser.add_argument('--sub_img_path', type=str,
-                        default='/home/binduan/Downloads/NIH/download.brainlib.org/hackathon/2022_GYBS/data/subject/192341_red_mm_SLA.nii.gz',
+                        default='/home/binduan/Downloads/NIH/192341_red_mm_SLA.tif',
                         help='Path to the raw image file (.nii.gz).')
     parser.add_argument('--result_path', type=str,
-                        default='/home/binduan/Downloads/NIH/tmp_test3/',
+                        default='/home/binduan/Downloads/NIH/tmp_test1/',
                         help='Path to intermediate results.')
-    parser.add_argument('--suffix', type=str, default='.nii.gz',
+    parser.add_argument('--suffix', type=str, default='.tif',
                         help='Which file format to be used for saving final result.')
 
     args = parser.parse_args()

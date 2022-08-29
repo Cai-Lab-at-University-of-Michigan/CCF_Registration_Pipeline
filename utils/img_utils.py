@@ -5,20 +5,28 @@ import os
 
 
 def get_physical_spacing(file_str):
+    """convert to mm"""
     img_obj = sitk.ReadImage(file_str)
-    return np.array(img_obj.GetSpacing())
+    spacing = img_obj.GetSpacing()
+    return np.array(spacing)
 
 
-def convert_to_nii(input, output):
+def convert_to_nii(input, output, what_dtype=np.uint8, normalize=False):
     if not os.path.isfile(output):
         with TiffFile(input) as tif:
             img_np = tif.asarray()
+            if normalize:
+                img_np = img_np / np.amax(img_np) * 255
+
+            img_np = np.array(img_np, dtype=what_dtype)
             imagej_metadata = tif.imagej_metadata
         img_obj = sitk.GetImageFromArray(img_np)
         z_spacing = imagej_metadata['spacing']
         x_spacing = convert_spacing(tif.pages[0].tags['XResolution'].value)
         y_spacing = convert_spacing(tif.pages[0].tags['YResolution'].value)
         spacing = np.array([x_spacing, y_spacing, z_spacing])
+        if imagej_metadata['unit'] == 'micron':
+            spacing = spacing / 1000
         img_obj.SetSpacing(spacing)
         sitk.WriteImage(img_obj, output)
     else:
@@ -46,10 +54,13 @@ def read_nii_bysitk(file_str, metadata=False):
         return img_obj
 
 
-def write_nii_bysitk(dst_file_str, img_np, src_obj=None):
+def write_nii_bysitk(dst_file_str, img_np, src_obj=None, spacing=None):
     img_obj = sitk.GetImageFromArray(img_np)
     if src_obj is not None:
         img_obj.CopyInformation(src_obj)
+
+    if spacing is not None:
+        img_obj.SetSpacing(spacing)
 
     # if src_obj is None:
     #     if img_np.ndim == 4: # displacement
