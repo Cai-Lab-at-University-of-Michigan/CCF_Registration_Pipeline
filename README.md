@@ -36,7 +36,7 @@
       - Numerical dtype: uint16 for average template, uint32 for annotation
 - To run the program:
    - Please use absolute path
-   - `python pipeline.py --ref_img_path /path/to/ccf_template.nii.gz --ref_ann_path /path/to/ccf_template_annotation.nii.gz --sub_img_path /path/to/experimental_brain.nii.gz --result_path /path/to/save_results/ --suffix .nii.gz`
+   - `python pipeline_ants.py --ref_img_path /path/to/ccf_template.nii.gz --ref_ann_path /path/to/ccf_template_annotation.nii.gz --sub_img_path /path/to/experimental_brain.nii.gz --result_path /path/to/save_results/ --suffix .nii.gz`
 
 **[Results]**: Warped ccf_template and ccf_template_annotation images are stored in `/path/to/save_results/subject/ants/ccf_affined/`
 
